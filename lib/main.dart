@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter/services.dart';
-import 'package:image/image.dart' as imglib;
 
 import 'overlay.dart';
 
@@ -104,7 +103,7 @@ class _CameraScreenState extends State<CameraScreen> {
   int width = 0;
   int height = 0;
   bool streamStarted = false;
-  final int res = 5;
+  final int res = 4;
   var rgb;
 
   @override
@@ -157,11 +156,10 @@ class _CameraScreenState extends State<CameraScreen> {
   }
 
   void setImage(CameraImage image) {
-
     final int width = image.width;
     final int height = image.height;
-    final int uvRowStride = image.planes[0].bytesPerRow;
-    final int uvPixelStride = image.planes[0].bytesPerPixel;
+    final int uvRowStride = image.planes[1].bytesPerRow;
+    final int uvPixelStride = image.planes[1].bytesPerPixel;
 
     final int scaledWidth = width ~/ res;
     final int scaledHeight = height ~/ res;
@@ -171,10 +169,11 @@ class _CameraScreenState extends State<CameraScreen> {
             scaledHeight, (j) => List.filled(3, 0, growable: false),
             growable: false),
         growable: false);
-    for(int x=0; x < width; x+=res) {
-      for(int y=0; y < height; y+=res) {
-        final int uvIndex = uvPixelStride * (x/2).floor() + uvPixelStride * (y/2).floor();
-        final int index = y * width + x;
+    for (int x = 0; x < width; x += res) {
+      for (int y = 0; y < height; y += res) {
+        final int uvIndex =
+            uvPixelStride * (x / 2).floor() + uvRowStride * (y / 2).floor();
+        final int index = y * uvRowStride + x;
 
         final yp = image.planes[0].bytes[index];
         final up = image.planes[1].bytes[uvIndex];
@@ -183,12 +182,14 @@ class _CameraScreenState extends State<CameraScreen> {
 
         final int scaledX = x ~/ res;
         final int scaledY = y ~/ res;
-        rgb[scaledX][scaledY][0] = (yp + vp * 1436 / 1024 - 179).round().clamp(0, 255);
+        rgb[scaledX][scaledY][0] =
+            (yp + vp * 1436 / 1024 - 179).round().clamp(0, 255);
         rgb[scaledX][scaledY][1] =
             (yp - up * 46549 / 131072 + 44 - vp * 93604 / 131072 + 91)
                 .round()
                 .clamp(0, 255);
-        rgb[scaledX][scaledY][2] = (yp + up * 1814 / 1024 - 227).round().clamp(0, 255);
+        rgb[scaledX][scaledY][2] =
+            (yp + up * 1814 / 1024 - 227).round().clamp(0, 255);
       }
     }
   }
