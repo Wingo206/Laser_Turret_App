@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter/services.dart';
+import 'package:image/image.dart' as imglib;
 
 import 'overlay.dart';
 
@@ -14,22 +15,20 @@ Future<void> main() async {
 }
 
 class LaserTurretApp extends StatefulWidget {
+  var rgb;
+  int res = 5;
   final CameraDescription camera;
 
-  const LaserTurretApp({
-    Key key,
-    @required this.camera,
-  }) : super(key: key);
+  LaserTurretApp({Key key, @required this.camera}) : super(key: key);
 
   @override
-  _LaserTurretAppState createState() => _LaserTurretAppState(camera);
+  _LaserTurretAppState createState() => _LaserTurretAppState();
 }
 
-class _LaserTurretAppState extends State<LaserTurretApp> {
-  final CameraDescription camera;
-  final OverlayPainter painter = new OverlayPainter();
-
-  _LaserTurretAppState(this.camera);
+class _LaserTurretAppState extends State<LaserTurretApp>
+    with SingleTickerProviderStateMixin {
+  Animation<double> animation;
+  AnimationController aController;
 
   @override
   void initState() {
@@ -37,6 +36,23 @@ class _LaserTurretAppState extends State<LaserTurretApp> {
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeLeft,
     ]);
+
+    Tween<double> tween = new Tween(begin: 0.0, end: 0.0);
+    aController = AnimationController(
+      vsync: this,
+      duration: Duration(seconds: 1),
+    );
+    animation = tween.animate(aController)
+      ..addListener(() {
+        setState(() {});
+      })
+      ..addStatusListener((status) {
+        if (status == AnimationStatus.completed) {
+          aController.repeat();
+        } else if (status == AnimationStatus.dismissed) {
+          aController.forward();
+        }
+      });
   }
 
   @override
@@ -58,11 +74,11 @@ class _LaserTurretAppState extends State<LaserTurretApp> {
       home: Scaffold(
         body: Padding(
           padding: const EdgeInsets.all(10.0),
-          child: CustomPaint(
-            foregroundPainter: painter,
-            child: CameraScreen(
-              camera: camera,
-            ),
+          child: AnimatedBuilder(
+            animation: animation,
+            builder: (context, snapshot) {
+              return CameraScreen(camera: widget.camera);
+            },
           ),
         ),
       ),
@@ -73,7 +89,7 @@ class _LaserTurretAppState extends State<LaserTurretApp> {
 class CameraScreen extends StatefulWidget {
   final CameraDescription camera;
 
-  const CameraScreen({
+  CameraScreen({
     Key key,
     @required this.camera,
   }) : super(key: key);
@@ -88,6 +104,8 @@ class _CameraScreenState extends State<CameraScreen> {
   int width = 0;
   int height = 0;
   bool streamStarted = false;
+  final int res = 5;
+  var rgb;
 
   @override
   void initState() {
@@ -107,32 +125,71 @@ class _CameraScreenState extends State<CameraScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      children: [
-        RotatedBox(
-          quarterTurns: 2,
-          child: FutureBuilder<void>(
-            future: _initializeControllerFuture,
-            builder: (context, snapshot) {
-              if (snapshot.connectionState == ConnectionState.done) {
-                if (!streamStarted) {
-                  _controller.startImageStream((image) {
-                    setState(() {
-                      this.width = image.width;
-                      this.height = image.height;
+    return CustomPaint(
+      foregroundPainter: OverlayPainter(rgb),
+      child: Row(
+        children: [
+          RotatedBox(
+            quarterTurns: 2,
+            child: FutureBuilder<void>(
+              future: _initializeControllerFuture,
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.done) {
+                  if (!streamStarted) {
+                    _controller.startImageStream((image) {
+                      setState(() {
+                        setImage(image);
+                      });
                     });
-                  });
-                  streamStarted = true;
+                    streamStarted = true;
+                  }
+                  return CameraPreview(_controller);
+                } else {
+                  return Center(child: CircularProgressIndicator());
                 }
-                return CameraPreview(_controller);
-              } else {
-                return Center(child: CircularProgressIndicator());
-              }
-            },
+              },
+            ),
           ),
-        ),
-        Text("width: " + width.toString() + ", height" + height.toString()),
-      ],
+          Text("width: " + width.toString() + ", height" + height.toString()),
+        ],
+      ),
     );
+  }
+
+  void setImage(CameraImage image) {
+
+    final int width = image.width;
+    final int height = image.height;
+    final int uvRowStride = image.planes[0].bytesPerRow;
+    final int uvPixelStride = image.planes[0].bytesPerPixel;
+
+    final int scaledWidth = width ~/ res;
+    final int scaledHeight = height ~/ res;
+    this.rgb = List.generate(
+        scaledWidth,
+        (i) => List.generate(
+            scaledHeight, (j) => List.filled(3, 0, growable: false),
+            growable: false),
+        growable: false);
+    for(int x=0; x < width; x+=res) {
+      for(int y=0; y < height; y+=res) {
+        final int uvIndex = uvPixelStride * (x/2).floor() + uvPixelStride * (y/2).floor();
+        final int index = y * width + x;
+
+        final yp = image.planes[0].bytes[index];
+        final up = image.planes[1].bytes[uvIndex];
+        final vp = image.planes[2].bytes[uvIndex];
+        // Calculate pixel color
+
+        final int scaledX = x ~/ res;
+        final int scaledY = y ~/ res;
+        rgb[scaledX][scaledY][0] = (yp + vp * 1436 / 1024 - 179).round().clamp(0, 255);
+        rgb[scaledX][scaledY][1] =
+            (yp - up * 46549 / 131072 + 44 - vp * 93604 / 131072 + 91)
+                .round()
+                .clamp(0, 255);
+        rgb[scaledX][scaledY][2] = (yp + up * 1814 / 1024 - 227).round().clamp(0, 255);
+      }
+    }
   }
 }
