@@ -156,6 +156,17 @@ class _CameraScreenState extends State<CameraScreen> {
     );
   }
 
+  static const int aShift = 0xFF000000;
+  static const int div1 = 1024;
+  static const int div2 = 131072;
+  static const int rMult = 1436;
+  static const int rConst = -179;
+  static const int gMult1 = 46549;
+  static const int gConst1 = 44;
+  static const int gMult2 = 93604;
+  static const int gConst2 = 91;
+  static const int bMult = 1814;
+  static const int bConst = -227;
   void setImage(CameraImage image) {
     final int width = image.width;
     final int height = image.height;
@@ -166,16 +177,13 @@ class _CameraScreenState extends State<CameraScreen> {
     final int scaledHeight = height ~/ res;
     if (rgb == null || rgb.length != scaledWidth) {
       this.rgb = List.generate(
-          scaledWidth,
-          (i) => List.generate(
-              scaledHeight, (j) => List.filled(3, 0, growable: false),
-              growable: false),
+          scaledWidth, (i) => List.filled(scaledHeight, 0, growable: false),
           growable: false);
     }
+    final int t1 = DateTime.now().microsecondsSinceEpoch;
     for (int x = 0; x < width; x += res) {
       for (int y = 0; y < height; y += res) {
-        final int uvIndex =
-            uvPixelStride * (x / 2).floor() + uvRowStride * (y / 2).floor();
+        final int uvIndex = uvPixelStride * (x / 2).floor() + uvRowStride * (y / 2).floor();
         final int index = y * uvRowStride + x;
 
         final yp = image.planes[0].bytes[index];
@@ -183,17 +191,13 @@ class _CameraScreenState extends State<CameraScreen> {
         final vp = image.planes[2].bytes[uvIndex];
         // Calculate pixel color
 
-        final int scaledX = x ~/ res;
-        final int scaledY = y ~/ res;
-        this.rgb[scaledX][scaledY][0] =
-            (yp + vp * 1436 / 1024 - 179).round().clamp(0, 255);
-        this.rgb[scaledX][scaledY][1] =
-            (yp - up * 46549 / 131072 + 44 - vp * 93604 / 131072 + 91)
-                .round()
-                .clamp(0, 255);
-        this.rgb[scaledX][scaledY][2] =
-            (yp + up * 1814 / 1024 - 227).round().clamp(0, 255);
+        rgb[x ~/ res][y ~/ res] = aShift |
+            ((yp + vp * rMult / div1 + rConst).round().clamp(0, 255)).toInt() << 16 |
+            ((yp - up * gMult1 / div2 + gConst1 - vp * gMult2 / div2 + gConst2).round().clamp(0, 255)).toInt() << 8 |
+            (yp + up * bMult / div1 + bConst).round().clamp(0, 255).toInt();
       }
     }
+    final int t2 = DateTime.now().microsecondsSinceEpoch;
+    print("calculation "+(t2-t1).toString());
   }
 }
