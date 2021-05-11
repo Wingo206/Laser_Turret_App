@@ -104,7 +104,7 @@ class _CameraScreenState extends State<CameraScreen> {
   int height = 0;
   bool streamStarted = false;
   final int res = 4;
-  var rgb;
+  List rgb;
 
   @override
   void initState() {
@@ -124,11 +124,13 @@ class _CameraScreenState extends State<CameraScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return CustomPaint(
-      foregroundPainter: OverlayPainter(rgb),
-      child: Row(
-        children: [
-          RotatedBox(
+    return FittedBox(
+      child: SizedBox(
+        width: 720,
+        height: 480,
+        child: CustomPaint(
+          foregroundPainter: OverlayPainter(rgb),
+          child: RotatedBox(
             quarterTurns: 2,
             child: FutureBuilder<void>(
               future: _initializeControllerFuture,
@@ -149,8 +151,7 @@ class _CameraScreenState extends State<CameraScreen> {
               },
             ),
           ),
-          Text("width: " + width.toString() + ", height" + height.toString()),
-        ],
+        ),
       ),
     );
   }
@@ -163,12 +164,14 @@ class _CameraScreenState extends State<CameraScreen> {
 
     final int scaledWidth = width ~/ res;
     final int scaledHeight = height ~/ res;
-    this.rgb = List.generate(
-        scaledWidth,
-        (i) => List.generate(
-            scaledHeight, (j) => List.filled(3, 0, growable: false),
-            growable: false),
-        growable: false);
+    if (rgb == null || rgb.length != scaledWidth) {
+      this.rgb = List.generate(
+          scaledWidth,
+          (i) => List.generate(
+              scaledHeight, (j) => List.filled(3, 0, growable: false),
+              growable: false),
+          growable: false);
+    }
     for (int x = 0; x < width; x += res) {
       for (int y = 0; y < height; y += res) {
         final int uvIndex =
@@ -182,13 +185,13 @@ class _CameraScreenState extends State<CameraScreen> {
 
         final int scaledX = x ~/ res;
         final int scaledY = y ~/ res;
-        rgb[scaledX][scaledY][0] =
+        this.rgb[scaledX][scaledY][0] =
             (yp + vp * 1436 / 1024 - 179).round().clamp(0, 255);
-        rgb[scaledX][scaledY][1] =
+        this.rgb[scaledX][scaledY][1] =
             (yp - up * 46549 / 131072 + 44 - vp * 93604 / 131072 + 91)
                 .round()
                 .clamp(0, 255);
-        rgb[scaledX][scaledY][2] =
+        this.rgb[scaledX][scaledY][2] =
             (yp + up * 1814 / 1024 - 227).round().clamp(0, 255);
       }
     }
