@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter/services.dart';
@@ -15,7 +17,6 @@ Future<void> main() async {
 
 class LaserTurretApp extends StatefulWidget {
   var rgb;
-  int res = 5;
   final CameraDescription camera;
 
   LaserTurretApp({Key key, @required this.camera}) : super(key: key);
@@ -103,8 +104,12 @@ class _CameraScreenState extends State<CameraScreen> {
   int width = 0;
   int height = 0;
   bool streamStarted = false;
-  final int res = 4;
+  final int res = 6;
+  double lowerThreshold = 20;
+  double upperThreshold = 50;
   List rgb;
+  List<String> modes = ['none', 'rgb', 'grayscale', 'gaussian filter', 'edges', 'Gradient Magnitude Threshold', 'double threshold', 'hysteresis'];
+  int mode = 0;
 
   @override
   void initState() {
@@ -124,39 +129,111 @@ class _CameraScreenState extends State<CameraScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return FittedBox(
-      child: SizedBox(
-        width: 720,
-        height: 480,
-        child: CustomPaint(
-          foregroundPainter: OverlayPainter(rgb),
-          child: RotatedBox(
-            quarterTurns: 2,
-            child: FutureBuilder<void>(
-              future: _initializeControllerFuture,
-              builder: (context, snapshot) {
-                if (snapshot.connectionState == ConnectionState.done) {
-                  if (!streamStarted) {
-                    _controller.startImageStream((image) {
-                      setState(() {
-                        setImage(image);
-                      });
-                    });
-                    streamStarted = true;
-                  }
-                  return CameraPreview(_controller);
-                } else {
-                  return Center(child: CircularProgressIndicator());
-                }
-              },
+    return Padding(
+      padding: const EdgeInsets.only(top: 15.0, bottom: 15.0),
+      child: Row(
+        children: [
+          FittedBox(
+            child: SizedBox(
+              width: 720,
+              height: 480,
+              child: CustomPaint(
+                foregroundPainter: OverlayPainter(rgb, res, mode),
+                child: RotatedBox(
+                  quarterTurns: 2,
+                  child: FutureBuilder<void>(
+                    future: _initializeControllerFuture,
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState == ConnectionState.done) {
+                        if (!streamStarted) {
+                          _controller.startImageStream((image) {
+                            setState(() {
+                              setImage(image);
+                            });
+                          });
+                          streamStarted = true;
+                        }
+                        return CameraPreview(_controller);
+                      } else {
+                        return Center(child: CircularProgressIndicator());
+                      }
+                    },
+                  ),
+                ),
+              ),
             ),
           ),
-        ),
+          Expanded(
+            child: Center(
+              child: Column(
+                children: [
+                  Column(
+                    mainAxisAlignment: MainAxisAlignment.start,
+                    children: modes
+                        .map(
+                          (String s) => Padding(
+                            padding: const EdgeInsets.all(3.0),
+                            child: GestureDetector(
+                              onTap: () {
+                                setState(() {
+                                  mode = modes.indexOf(s);
+                                });
+                              },
+                              child: SizedBox(
+                                width: 180,
+                                height: 20,
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    color: Color(0xFFEEEEEE),
+                                  ),
+                                  child: Center(
+                                    child: Text(s),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        )
+                        .toList(),
+                  ),
+                  Column(
+                    children: [
+                      Slider(
+                        value: upperThreshold,
+                        min: 0,
+                        max: 255,
+                        divisions: 32,
+                        label: upperThreshold.round().toString(),
+                        onChanged: (double value) {
+                          setState(() {
+                            upperThreshold = value;
+                          });
+                        },
+                      ),
+                      Slider(
+                        value: lowerThreshold,
+                        min: 0,
+                        max: 255,
+                        divisions: 32,
+                        label: lowerThreshold.round().toString(),
+                        onChanged: (double value) {
+                          setState(() {
+                            lowerThreshold = value;
+                          });
+                        },
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  static const int aShift = 0xFF000000;
+  static const int aShift = 0xff000000;
   static const int div1 = 1024;
   static const int div2 = 131072;
   static const int rMult = 1436;
@@ -176,28 +253,145 @@ class _CameraScreenState extends State<CameraScreen> {
     final int scaledWidth = width ~/ res;
     final int scaledHeight = height ~/ res;
     if (rgb == null || rgb.length != scaledWidth) {
-      this.rgb = List.generate(
-          scaledWidth, (i) => List.filled(scaledHeight, 0, growable: false),
+      this.rgb = List<List<int>>.generate(
+          scaledWidth, (i) => List<int>.filled(scaledHeight, 0, growable: false),
           growable: false);
     }
-    final int t1 = DateTime.now().microsecondsSinceEpoch;
-    for (int x = 0; x < width; x += res) {
-      for (int y = 0; y < height; y += res) {
-        final int uvIndex = uvPixelStride * (x / 2).floor() + uvRowStride * (y / 2).floor();
-        final int index = y * uvRowStride + x;
-
-        final yp = image.planes[0].bytes[index];
-        final up = image.planes[1].bytes[uvIndex];
-        final vp = image.planes[2].bytes[uvIndex];
-        // Calculate pixel color
-
-        rgb[x ~/ res][y ~/ res] = aShift |
+    if (mode == 1) { // rgb conversion
+      for (int x = 0; x < width; x += res) {
+        for (int y = 0; y < height; y += res) {
+          final int uvIndex = uvPixelStride * (x / 2).floor() + uvRowStride * (y / 2).floor();
+          final int index = y * uvRowStride + x;
+          final yp = image.planes[0].bytes[index];
+          final up = image.planes[1].bytes[uvIndex];
+          final vp = image.planes[2].bytes[uvIndex];
+          rgb[x ~/ res][y ~/ res] = aShift |
             ((yp + vp * rMult / div1 + rConst).round().clamp(0, 255)).toInt() << 16 |
             ((yp - up * gMult1 / div2 + gConst1 - vp * gMult2 / div2 + gConst2).round().clamp(0, 255)).toInt() << 8 |
             (yp + up * bMult / div1 + bConst).round().clamp(0, 255).toInt();
+        }
       }
+    } else if (mode >= 2) { // grayscale
+      List<List> buffer = List<List<int>>.from(rgb);
+      for (int x = 0; x < width; x += res) {
+        for (int y = 0; y < height; y += res) {
+           buffer[x ~/ res][y ~/ res] = image.planes[0].bytes[y * uvRowStride + x];
+        }
+      }
+      if (mode >= 3) {//apply blur
+        buffer = convolution(buffer, gaussianKernel, gaussianScale, true);
+        if (mode >= 4) {//edges
+          final List<List<int>> dx = convolution(buffer, xKernel, 1, false);
+          final List<List<int>> dy = convolution(buffer, yKernel, 1, false);
+          for (int x = 0; x < scaledWidth; x++) {
+            for (int y = 0; y < scaledHeight; y++) {
+              buffer[x][y] = sqrt(pow(dx[x][y], 2) + pow(dy[x][y], 2)).toInt().clamp(0, 255);
+            }
+          }
+          if (mode >= 5) {//gradient-magnitude threshold
+            for (int x = 1; x < scaledWidth - 1; x++) {
+              for (int y = 1; y < scaledHeight - 1; y++) {
+                final double angle = atan2(dy[x][y], dx[x][y]);
+                final int xOffset = cos(angle).round();
+                final int yOffset = sin(angle).round();
+                final int curMagnitude = buffer[x][y];
+                if (curMagnitude < buffer[x + xOffset][y + yOffset] || curMagnitude < buffer[x - xOffset][y - yOffset]) {
+                  buffer[x][y] = 0;
+                }
+              }
+            }
+            if (mode >= 6) {//double threshold
+              final List<List<bool>> boolBuffer = create2DArray<bool>(scaledWidth, scaledHeight, false);
+              final List<List<bool>> strong = create2DArray<bool>(scaledWidth, scaledHeight, false);
+              final List<List<bool>> weak = create2DArray<bool>(scaledWidth, scaledHeight, false);
+              for (int x = 0; x < scaledWidth; x++) {
+                for (int y = 0; y < scaledHeight; y++) {
+                  final int value = buffer[x][y];
+                  if (value > upperThreshold) {
+                    strong[x][y] = true;
+                    boolBuffer[x][y] = true;
+                  } else if (value > lowerThreshold) {
+                    weak[x][y] = true;
+                  }
+                }
+              }
+              if (mode >= 7) {//hysteresis
+                for (int x = 0; x < scaledWidth - 2; x++) {
+                  for (int y = 0; y < scaledHeight - 2; y++) {
+                    if (weak[x][y] &&
+                        (strong[x][y] ||
+                            strong[x + 1][y] ||
+                            strong[x + 2][y] ||
+                            strong[x][y + 1] ||
+                            strong[x + 1][y + 1] ||
+                            strong[x + 2][y + 1] ||
+                            strong[x][y + 2] ||
+                            strong[x + 1][y + 2] ||
+                            strong[x + 2][y + 2])) {
+                      boolBuffer[x + 1][y + 1] = true;
+                    }
+                  }
+                }
+              }
+              //convert boolean image to grayscale
+              for (int x = 0; x < scaledWidth; x++) {
+                for (int y = 0; y < scaledHeight; y++) {
+                  if (boolBuffer[x][y]) {
+                    buffer[x][y] = 255;
+                  } else {
+                    buffer[x][y] = 0;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      rgb = buffer;
     }
-    final int t2 = DateTime.now().microsecondsSinceEpoch;
-    print("calculation "+(t2-t1).toString());
   }
+}
+
+const gaussianKernel = [1, 2, 1, 2, 4, 2, 1, 2, 1];
+const xKernel = [1, 0, -1, 2, 0, -2, 1, 0, -1];
+const yKernel = [1, 2, 1, 0, 0, 0, -1, -2, -1];
+const gaussianScale = 16;
+List<List<int>> convolution (List<List<int>> p, List<int> k, int scale, bool copyEdges) {
+  final int width = p.length;
+  final int height = p[0].length;
+
+  List<List<int>> buffer = create2DArray<int>(p.length, p[0].length, 0);
+
+  for (int x = 0; x < width-2; x++) {
+    for (int y = 0; y < height-2; y++) {
+      int accum =
+          p[x][y]*k[0] + p[x+1][y]*k[1] + p[x+2][y]*k[2] +
+          p[x][y+1]*k[3] + p[x+1][y+1]*k[4] + p[x+2][y+1]*k[5] +
+          p[x][y+2]*k[6] + p[x+1][y+2]*k[7] + p[x+2][y+2]*k[8];
+
+        /*int accum = 0;
+        for(int i = 0; i < k.length; i++) {
+          accum += p[i % 3 + x][i ~/ 3 + y] * k[i];
+        }*/
+
+      buffer[x+1][y+1] = (accum / scale).round();
+    }
+  }
+  if (copyEdges) {
+    for (int i = 0; i < width; i++) {
+      buffer[i][0] = p[i][0];
+      buffer[i][height-1] = p[i][height-1];
+    }
+    for (int i = 0; i < height; i++) {
+      buffer[0][i] = p[0][i];
+      buffer[width-1][i] = p[width-1][i];
+    }
+  }
+  return buffer;
+}
+
+List<List<T>> create2DArray<T>(int w, int h, T defaultValue) {
+  return List<List<T>>.generate(
+      w, (i) => List<T>.filled(h, defaultValue, growable: false),
+      growable: false);
 }
