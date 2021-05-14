@@ -105,11 +105,14 @@ class _CameraScreenState extends State<CameraScreen> {
   int height = 0;
   bool streamStarted = false;
   final int res = 6;
-  double lowerThreshold = 20;
+  double maxCircleSize = 30;
+  double minCircleSize = 7;
   double upperThreshold = 50;
   List rgb;
-  List<String> modes = ['none', 'rgb', 'grayscale', 'gaussian filter', 'edges', 'Gradient Magnitude Threshold', 'double threshold', 'hysteresis'];
+  List<String> modes = ['none', 'rgb', 'grayscale', 'gaussian filter', 'edges', 'Gradient Magnitude Threshold', 'double threshold', 'Hough Transform'];
   int mode = 0;
+  bool calculating = false;
+  double circleX, circleY, circleR = 0;
 
   @override
   void initState() {
@@ -119,6 +122,7 @@ class _CameraScreenState extends State<CameraScreen> {
       ResolutionPreset.medium,
     );
     _initializeControllerFuture = _controller.initialize();
+    calculateCirclePoints();
   }
 
   @override
@@ -138,7 +142,7 @@ class _CameraScreenState extends State<CameraScreen> {
               width: 720,
               height: 480,
               child: CustomPaint(
-                foregroundPainter: OverlayPainter(rgb, res, mode),
+                foregroundPainter: OverlayPainter(rgb, res, mode, circleX, circleY, circleR),
                 child: RotatedBox(
                   quarterTurns: 2,
                   child: FutureBuilder<void>(
@@ -148,7 +152,9 @@ class _CameraScreenState extends State<CameraScreen> {
                         if (!streamStarted) {
                           _controller.startImageStream((image) {
                             setState(() {
-                              setImage(image);
+                              if (!calculating) {
+                                setImage(image);
+                              }
                             });
                           });
                           streamStarted = true;
@@ -211,14 +217,15 @@ class _CameraScreenState extends State<CameraScreen> {
                         },
                       ),
                       Slider(
-                        value: lowerThreshold,
-                        min: 0,
-                        max: 255,
-                        divisions: 32,
-                        label: lowerThreshold.round().toString(),
+                        value: maxCircleSize,
+                        min: 10,
+                        max: 50,
+                        divisions: 40,
+                        label: maxCircleSize.round().toString(),
                         onChanged: (double value) {
                           setState(() {
-                            lowerThreshold = value;
+                            maxCircleSize = value;
+                            calculateCirclePoints();
                           });
                         },
                       ),
@@ -231,6 +238,20 @@ class _CameraScreenState extends State<CameraScreen> {
         ],
       ),
     );
+  }
+  static const int angleSamples = 18;
+  static const double angleInc = 2 * pi/angleSamples;
+  List<List<int>>houghXPoints;
+  List<List<int>>houghYPoints;
+  calculateCirclePoints() {
+    houghXPoints = List<List<int>>.generate(
+        (maxCircleSize - minCircleSize).toInt(),
+        (r) => List<int>.generate(
+            angleSamples, (i) => ((r + minCircleSize) * cos(i * angleInc)).round()));
+    houghYPoints = List<List<int>>.generate(
+        (maxCircleSize - minCircleSize).toInt(),
+        (r) => List<int>.generate(
+            angleSamples, (i) => ((r + minCircleSize) * sin(i * angleInc)).round()));
   }
 
   static const int aShift = 0xff000000;
@@ -245,6 +266,10 @@ class _CameraScreenState extends State<CameraScreen> {
   static const int bMult = 1814;
   static const int bConst = -227;
   void setImage(CameraImage image) {
+
+    calculating = true;
+    final int t1 = DateTime.now().microsecondsSinceEpoch;
+
     final int width = image.width;
     final int height = image.height;
     final int uvRowStride = image.planes[1].bytesPerRow;
@@ -302,44 +327,69 @@ class _CameraScreenState extends State<CameraScreen> {
             }
             if (mode >= 6) {//double threshold
               final List<List<bool>> boolBuffer = create2DArray<bool>(scaledWidth, scaledHeight, false);
-              final List<List<bool>> strong = create2DArray<bool>(scaledWidth, scaledHeight, false);
-              final List<List<bool>> weak = create2DArray<bool>(scaledWidth, scaledHeight, false);
               for (int x = 0; x < scaledWidth; x++) {
                 for (int y = 0; y < scaledHeight; y++) {
                   final int value = buffer[x][y];
                   if (value > upperThreshold) {
-                    strong[x][y] = true;
                     boolBuffer[x][y] = true;
-                  } else if (value > lowerThreshold) {
-                    weak[x][y] = true;
                   }
                 }
               }
-              if (mode >= 7) {//hysteresis
-                for (int x = 0; x < scaledWidth - 2; x++) {
-                  for (int y = 0; y < scaledHeight - 2; y++) {
-                    if (weak[x][y] &&
-                        (strong[x][y] ||
-                            strong[x + 1][y] ||
-                            strong[x + 2][y] ||
-                            strong[x][y + 1] ||
-                            strong[x + 1][y + 1] ||
-                            strong[x + 2][y + 1] ||
-                            strong[x][y + 2] ||
-                            strong[x + 1][y + 2] ||
-                            strong[x + 2][y + 2])) {
-                      boolBuffer[x + 1][y + 1] = true;
+              if (mode >= 7) {//hough transform
+                List<List<List<int>>> houghAccum = List<List<List<int>>>.generate(
+                        (maxCircleSize - minCircleSize).toInt(),
+                        (r) => List<List<int>>.generate(
+                            scaledWidth,
+                            (i) => List<int>.filled(scaledHeight, 0,
+                                growable: false),
+                            growable: false),
+                        growable: false);
+                for (int r = 0; r < (maxCircleSize - minCircleSize).toInt(); r++) {//r = min + current radius
+                  List<int> xPoints = houghXPoints[r];
+                  List<int> yPoints = houghYPoints[r];
+                  for (int x = 0; x < scaledWidth; x++) {
+                    for (int y = 0; y < scaledHeight; y++) {
+                      if (boolBuffer[x][y]) {
+                        for (int i = 0; i < angleSamples; i++) {
+                          final int x2 = x + xPoints[i];
+                          final int y2 = y + yPoints[i];
+                          if (x2 >= 0 && x2 < scaledWidth && y2 >= 0 &&
+                              y2 < scaledHeight) {
+                            houghAccum[r][x2][y2]++;
+                          }
+                        }
+                      }
                     }
                   }
                 }
-              }
-              //convert boolean image to grayscale
-              for (int x = 0; x < scaledWidth; x++) {
-                for (int y = 0; y < scaledHeight; y++) {
-                  if (boolBuffer[x][y]) {
-                    buffer[x][y] = 255;
-                  } else {
-                    buffer[x][y] = 0;
+                int maxValue = 0;
+                int maxX = 0;
+                int maxY = 0;
+                int maxR = 0;
+                for (int r = 0; r < (maxCircleSize - minCircleSize).toInt(); r++) {
+                  for (int x = 0; x < scaledWidth; x++) {
+                    for (int y = 0; y < scaledHeight; y++) {
+                      if (houghAccum[r][x][y] > maxValue) {
+                        maxX = x;
+                        maxY = y;
+                        maxR = r;
+                        maxValue = houghAccum[r][x][y];
+                      }
+                    }
+                  }
+                }
+                this.circleX = maxX.toDouble();
+                this.circleY = maxY.toDouble();
+                this.circleR = maxR.toDouble() + minCircleSize;
+              } else {
+                //convert boolean image to grayscale
+                for (int x = 0; x < scaledWidth; x++) {
+                  for (int y = 0; y < scaledHeight; y++) {
+                    if (boolBuffer[x][y]) {
+                      buffer[x][y] = 255;
+                    } else {
+                      buffer[x][y] = 0;
+                    }
                   }
                 }
               }
@@ -349,6 +399,10 @@ class _CameraScreenState extends State<CameraScreen> {
       }
       rgb = buffer;
     }
+
+    calculating = false;
+    final int t2 = DateTime.now().microsecondsSinceEpoch;
+    print("calculation "+(t2-t1).toString());
   }
 }
 
